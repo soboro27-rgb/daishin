@@ -1,0 +1,405 @@
+{% extends "base.html" %}
+{% block title %}신청 상세 #{{ app.id }} - 관리자 | 대신증권{% endblock %}
+
+{% block content %}
+<div class="page-header d-flex justify-content-between align-items-center">
+  <div>
+    <h4>
+      <i class="bi bi-file-earmark-text me-2" style="color:var(--ds)"></i>
+      {{ app.title if app.title else '신청서 #' ~ app.id }}
+    </h4>
+    <nav aria-label="breadcrumb">
+      <ol class="breadcrumb mb-0">
+        <li class="breadcrumb-item"><a href="/admin/applications" style="color:var(--ds)">신청 목록</a></li>
+        <li class="breadcrumb-item active">#{{ app.id }}</li>
+      </ol>
+    </nav>
+  </div>
+  <span class="s-badge bg-{{ STATUS_COLOR[app.status] }} {% if app.status in ['submitted','priced'] %}text-dark{% endif %}" style="font-size:13px;padding:6px 16px">
+    {{ STATUS_LABEL[app.status] }}
+  </span>
+</div>
+
+<!-- 진행 단계 -->
+{% set steps = [
+  ('submitted','접수'),('approved','승인'),('scheduled','일정확정'),
+  ('schedule_confirmed','수거예정'),('collected','수거완료'),
+  ('priced','금액산정'),('branch_confirmed','지점승인'),('completed','완료')
+] %}
+{% set status_order = ['draft','submitted','approved','scheduled','schedule_confirmed','collected','priced','branch_confirmed','completed'] %}
+{% set cur_idx = status_order.index(app.status) %}
+<div class="step-bar mb-4">
+  {% for s_key, s_name in steps %}
+  {% set s_idx = status_order.index(s_key) %}
+  <div class="step-item {% if s_idx < cur_idx %}step-done{% elif s_idx == cur_idx %}step-active{% else %}step-pending{% endif %}">
+    <div class="step-circle">{{ loop.index }}</div>
+    <div class="step-name">{{ s_name }}</div>
+  </div>
+  {% if not loop.last %}
+  <div class="step-line {% if s_idx < cur_idx %}step-done{% else %}step-pending{% endif %}"></div>
+  {% endif %}
+  {% endfor %}
+</div>
+
+<div class="row g-3">
+  <!-- 왼쪽 -->
+  <div class="col-lg-8">
+
+    <!-- 지점 정보 -->
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-building me-2"></i>지점 정보</div>
+      <div class="card-body">
+        <div class="row g-2" style="font-size:13px">
+          <div class="col-4"><span class="text-muted">지점명</span><div class="fw-semibold mt-1">{{ app.user.branch_name }}</div></div>
+          <div class="col-4"><span class="text-muted">지점코드</span><div class="fw-semibold mt-1">{{ app.user.branch_code }}</div></div>
+          <div class="col-4"><span class="text-muted">지역</span><div class="fw-semibold mt-1">{{ app.user.region }}</div></div>
+          <div class="col-4"><span class="text-muted">신청일시</span><div class="fw-semibold mt-1">{{ app.submitted_at.strftime('%Y-%m-%d %H:%M') if app.submitted_at else '-' }}</div></div>
+          <div class="col-4"><span class="text-muted">승인일시</span><div class="fw-semibold mt-1">{{ app.approved_at.strftime('%Y-%m-%d %H:%M') if app.approved_at else '-' }}</div></div>
+          <div class="col-4"><span class="text-muted">최종업데이트</span><div class="fw-semibold mt-1">{{ app.updated_at.strftime('%Y-%m-%d %H:%M') if app.updated_at else '-' }}</div></div>
+          {% if app.notes %}
+          <div class="col-12">
+            <span class="text-muted">비고</span>
+            <div class="mt-1 p-2 bg-light rounded" style="font-size:12px">{{ app.notes }}</div>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- 자산 목록 -->
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-laptop me-2"></i>신청 자산 목록 ({{ app.assets|length }}종)</div>
+      <div class="card-body p-0">
+
+        {% if app.status == 'collected' and session.get('role') == 'coretail' %}
+        <!-- 금액 산정 폼 -->
+        <form method="post" action="/admin/applications/{{ app.id }}/pricing" onsubmit="return confirm('금액 산정 내용을 저장하고 지점에 통보하시겠습니까?')">
+          <table class="table mb-0" style="font-size:13px">
+            <thead class="table-light">
+              <tr>
+                <th class="ps-3">카테고리</th><th>모델명</th><th>수량</th><th>상태</th>
+                <th style="width:130px">단가 (원) *</th><th>소계</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in app.assets %}
+              <tr>
+                <td class="ps-3"><span class="badge bg-secondary">{{ item.category }}</span></td>
+                <td>{{ item.model_name or '-' }}<div class="text-muted" style="font-size:11px">{{ item.manufacturer or '' }}{% if item.manufacture_year %} {{ item.manufacture_year }}년{% endif %}</div></td>
+                <td><strong>{{ item.quantity }}</strong>개</td>
+                <td>{% if item.condition == '상' %}<span class="badge bg-success">상</span>{% elif item.condition == '중' %}<span class="badge bg-warning text-dark">중</span>{% else %}<span class="badge bg-danger">하</span>{% endif %}</td>
+                <td>
+                  <input type="number" name="price_{{ item.id }}" class="form-control form-control-sm price-input"
+                         value="{{ item.unit_price | int }}" min="0" step="1000"
+                         data-qty="{{ item.quantity }}" data-row="{{ item.id }}"
+                         oninput="calcRow(this)" style="font-size:13px"/>
+                </td>
+                <td class="fw-semibold" id="sub_{{ item.id }}" style="color:var(--ds)">
+                  {{ "{:,.0f}".format(item.unit_price * item.quantity) }}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+            <tfoot class="table-light">
+              <tr>
+                <td colspan="4" class="text-end fw-bold ps-3">합계</td>
+                <td></td>
+                <td class="fw-bold" style="color:var(--ds);font-size:15px" id="totalAmount">
+                  {% set total_amt = namespace(v=0) %}{% for item in app.assets %}{% set total_amt.v = total_amt.v + item.unit_price * item.quantity %}{% endfor %}
+                  {{ "{:,.0f}".format(total_amt.v) }}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+          <div class="p-3">
+            <label class="form-label" style="font-size:13px;font-weight:600">산정 비고</label>
+            <textarea name="pricing_notes" class="form-control" style="font-size:13px" rows="2" placeholder="감정 결과, 특이사항 등"></textarea>
+            <button type="submit" class="btn btn-ds mt-3 w-100">
+              <i class="bi bi-currency-dollar me-2"></i>금액 산정 완료 및 지점 통보
+            </button>
+          </div>
+        </form>
+
+        {% else %}
+        <!-- 일반 자산 목록 -->
+        <table class="table mb-0" style="font-size:13px">
+          <thead class="table-light">
+            <tr>
+              <th class="ps-3">카테고리</th><th>모델명</th><th>제조사</th><th>연도</th><th>수량</th><th>상태</th>
+              {% if app.status in ['priced','branch_confirmed','completed'] %}
+              <th>단가(원)</th><th>소계(원)</th>
+              {% endif %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in app.assets %}
+            <tr>
+              <td class="ps-3"><span class="badge bg-secondary">{{ item.category }}</span></td>
+              <td>{{ item.model_name or '-' }}</td>
+              <td>{{ item.manufacturer or '-' }}</td>
+              <td>{{ item.manufacture_year or '-' }}</td>
+              <td><strong>{{ item.quantity }}</strong>개</td>
+              <td>{% if item.condition == '상' %}<span class="badge bg-success">상</span>{% elif item.condition == '중' %}<span class="badge bg-warning text-dark">중</span>{% else %}<span class="badge bg-danger">하</span>{% endif %}</td>
+              {% if app.status in ['priced','branch_confirmed','completed'] %}
+              <td>{{ "{:,.0f}".format(item.unit_price) }}</td>
+              <td class="fw-semibold" style="color:var(--ds)">{{ "{:,.0f}".format(item.unit_price * item.quantity) }}</td>
+              {% endif %}
+            </tr>
+            {% endfor %}
+          </tbody>
+          {% if app.status in ['priced','branch_confirmed','completed'] and app.settlement %}
+          <tfoot class="table-light">
+            <tr>
+              <td colspan="6" class="text-end fw-bold ps-3">합계 매각 금액</td>
+              <td colspan="2" class="fw-bold" style="color:var(--ds);font-size:15px">
+                {{ "{:,.0f}".format(app.settlement.total_amount) }}원
+              </td>
+            </tr>
+          </tfoot>
+          {% endif %}
+        </table>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- 방문 일정 정보 -->
+    {% if app.schedule and app.status not in ['submitted','approved'] %}
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-calendar-check me-2"></i>방문 수거 일정</div>
+      <div class="card-body">
+        <div class="row g-2" style="font-size:13px">
+          <div class="col-4"><span class="text-muted">방문 예정일</span><div class="fw-semibold mt-1">{{ app.schedule.visit_date }}</div></div>
+          <div class="col-4"><span class="text-muted">방문 시간</span><div class="fw-semibold mt-1">{{ app.schedule.visit_time }}</div></div>
+          <div class="col-4"><span class="text-muted">담당자</span><div class="fw-semibold mt-1">{{ app.schedule.collector_name }}</div></div>
+          <div class="col-4"><span class="text-muted">연락처</span><div class="fw-semibold mt-1">{{ app.schedule.collector_phone }}</div></div>
+          <div class="col-4"><span class="text-muted">지점 확인</span>
+            <div class="mt-1">
+              {% if app.schedule.branch_confirmed %}
+              <span class="badge bg-success">확인완료 ({{ app.schedule.confirmed_at.strftime('%m-%d') if app.schedule.confirmed_at else '' }})</span>
+              {% else %}<span class="badge bg-warning text-dark">대기중</span>{% endif %}
+            </div>
+          </div>
+          {% if app.schedule.notes %}
+          <div class="col-12"><span class="text-muted">메모</span><div class="mt-1 p-2 bg-light rounded" style="font-size:12px">{{ app.schedule.notes }}</div></div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- 정산 정보 -->
+    {% if app.settlement and app.status in ['priced','branch_confirmed','completed'] %}
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-receipt me-2"></i>정산 정보</div>
+      <div class="card-body" style="font-size:13px">
+        <div class="row g-2">
+          <div class="col-6"><span class="text-muted">매각 금액</span><div class="fw-bold mt-1" style="font-size:18px;color:var(--ds)">{{ "{:,.0f}".format(app.settlement.total_amount) }}원</div></div>
+          <div class="col-6"><span class="text-muted">지점 승인</span>
+            <div class="mt-1">{% if app.settlement.branch_confirmed %}<span class="badge bg-success">승인 ({{ app.settlement.branch_confirmed_at.strftime('%m-%d') if app.settlement.branch_confirmed_at else '' }})</span>{% else %}<span class="badge bg-warning text-dark">대기중</span>{% endif %}</div>
+          </div>
+          <div class="col-6"><span class="text-muted">주관사 확인</span>
+            <div class="mt-1">{% if app.settlement.welfare_confirmed %}<span class="badge bg-success">확인완료</span>{% else %}<span class="badge bg-secondary">미확인</span>{% endif %}</div>
+          </div>
+          <div class="col-6"><span class="text-muted">입금일</span><div class="fw-semibold mt-1">{{ app.settlement.payment_date or '-' }}</div></div>
+          {% if app.settlement.pricing_notes %}
+          <div class="col-12"><span class="text-muted">비고</span><div class="mt-1 p-2 bg-light rounded" style="font-size:12px">{{ app.settlement.pricing_notes }}</div></div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+  </div>
+
+  <!-- 오른쪽: 액션 패널 -->
+  <div class="col-lg-4">
+
+    {% if app.status == 'submitted' and session.get('role') == 'coretail' %}
+    <!-- 승인 -->
+    <div class="card border-warning mb-3">
+      <div class="card-header" style="background:#fff8e1"><i class="bi bi-check-circle me-2"></i>신청 검토 및 승인</div>
+      <div class="card-body">
+        <p style="font-size:13px" class="mb-3">신청 내용을 검토한 후 승인해 주세요.</p>
+        <form method="post" action="/admin/applications/{{ app.id }}/approve" onsubmit="return confirm('신청을 승인하시겠습니까?')">
+          <button type="submit" class="btn btn-ds w-100">
+            <i class="bi bi-check-circle me-2"></i>승인 처리
+          </button>
+        </form>
+      </div>
+    </div>
+
+    {% elif app.status == 'approved' and session.get('role') == 'coretail' %}
+    <!-- 방문 일정 입력 -->
+    <div class="card border-primary mb-3">
+      <div class="card-header bg-primary text-white"><i class="bi bi-calendar-plus me-2"></i>방문 수거 일정 입력</div>
+      <div class="card-body">
+        <form method="post" action="/admin/applications/{{ app.id }}/schedule">
+          <div class="mb-2">
+            <label class="form-label" style="font-size:12px;font-weight:600">방문 예정일 *</label>
+            <input type="date" name="visit_date" class="form-control form-control-sm" required/>
+          </div>
+          <div class="mb-2">
+            <label class="form-label" style="font-size:12px;font-weight:600">방문 시간 *</label>
+            <input type="time" name="visit_time" class="form-control form-control-sm" required/>
+          </div>
+          <div class="mb-2">
+            <label class="form-label" style="font-size:12px;font-weight:600">수거 담당자명 *</label>
+            <input type="text" name="collector_name" class="form-control form-control-sm" placeholder="담당자명" required/>
+          </div>
+          <div class="mb-2">
+            <label class="form-label" style="font-size:12px;font-weight:600">담당자 연락처 *</label>
+            <input type="text" name="collector_phone" class="form-control form-control-sm" placeholder="010-0000-0000" required/>
+          </div>
+          <div class="mb-3">
+            <label class="form-label" style="font-size:12px;font-weight:600">메모</label>
+            <textarea name="notes" class="form-control form-control-sm" rows="2" placeholder="방문 시 안내사항 등"></textarea>
+          </div>
+          <button type="submit" class="btn btn-primary w-100">
+            <i class="bi bi-calendar-check me-2"></i>일정 등록 및 지점 통보
+          </button>
+        </form>
+      </div>
+    </div>
+
+    {% elif app.status == 'scheduled' %}
+    <div class="card border-0 mb-3" style="background:#e3f2fd">
+      <div class="card-body text-center py-4">
+        <i class="bi bi-hourglass-split" style="font-size:36px;color:#1565c0"></i>
+        <div class="fw-bold mt-2">지점 일정 확인 대기 중</div>
+        <div class="text-muted mt-1" style="font-size:12px">지점 담당자의 일정 확인을<br/>기다리고 있습니다.</div>
+      </div>
+    </div>
+
+    {% elif app.status == 'schedule_confirmed' and session.get('role') == 'coretail' %}
+    <!-- 수거 완료 처리 -->
+    <div class="card border-success mb-3">
+      <div class="card-header" style="background:#e8f5e9"><i class="bi bi-truck me-2"></i>수거 완료 처리</div>
+      <div class="card-body">
+        <p style="font-size:13px" class="mb-3">지점 방문 및 자산 수거 완료 후 처리하세요.</p>
+        <form method="post" action="/admin/applications/{{ app.id }}/collect" onsubmit="return confirm('수거 완료로 처리하시겠습니까?')">
+          <button type="submit" class="btn btn-success w-100">
+            <i class="bi bi-box-seam me-2"></i>수거 완료 처리
+          </button>
+        </form>
+      </div>
+    </div>
+
+    {% elif app.status == 'collected' and session.get('role') == 'coretail' %}
+    <div class="card border-0 mb-3" style="background:#fff3e0">
+      <div class="card-body text-center py-3">
+        <i class="bi bi-calculator" style="font-size:32px;color:#f57c00"></i>
+        <div class="fw-bold mt-2">좌측 표에서 금액 산정</div>
+        <div class="text-muted mt-1" style="font-size:12px">각 자산 항목의 단가를 입력하고<br/>금액 산정 완료 버튼을 눌러주세요.</div>
+      </div>
+    </div>
+
+    {% elif app.status == 'priced' %}
+    <div class="card border-0 mb-3" style="background:#fff8e1">
+      <div class="card-body text-center py-4">
+        <i class="bi bi-hourglass-split" style="font-size:36px;color:#f57c00"></i>
+        <div class="fw-bold mt-2">지점 금액 승인 대기 중</div>
+        <div class="text-muted mt-1" style="font-size:12px">지점 담당자의 금액 승인을<br/>기다리고 있습니다.</div>
+        {% if app.settlement %}
+        <div class="mt-3 p-2 bg-white rounded border">
+          <div style="font-size:22px;font-weight:700;color:var(--ds)">{{ "{:,.0f}".format(app.settlement.total_amount) }}원</div>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    {% elif app.status == 'branch_confirmed' and session.get('role') == 'welfare' %}
+    <!-- 입금 완료 (주관사만) -->
+    <div class="card border-success mb-3">
+      <div class="card-header" style="background:#e8f5e9"><i class="bi bi-bank me-2"></i>매각 대금 입금 처리</div>
+      <div class="card-body">
+        {% if app.settlement %}
+        <div class="text-center mb-3">
+          <div style="font-size:12px;color:#888">입금 금액</div>
+          <div style="font-size:24px;font-weight:700;color:var(--ds)">{{ "{:,.0f}".format(app.settlement.total_amount) }}원</div>
+        </div>
+        {% endif %}
+        <p style="font-size:13px" class="mb-3">지점으로 매각 대금 입금 후 처리하세요.</p>
+        <form method="post" action="/admin/applications/{{ app.id }}/complete" onsubmit="return confirm('입금 완료로 처리하시겠습니까?\n이 작업은 되돌릴 수 없습니다.')">
+          <button type="submit" class="btn btn-success w-100">
+            <i class="bi bi-bank me-2"></i>입금 완료 처리
+          </button>
+        </form>
+      </div>
+    </div>
+
+    {% elif app.status == 'branch_confirmed' and session.get('role') == 'coretail' %}
+    <div class="card border-0 mb-3" style="background:#e8f5e9">
+      <div class="card-body text-center py-4">
+        <i class="bi bi-hourglass-split" style="font-size:36px;color:var(--ds)"></i>
+        <div class="fw-bold mt-2">주관사 입금 처리 대기 중</div>
+        <div class="text-muted mt-1" style="font-size:12px">주관사에서 매각 대금<br/>입금 처리 중입니다.</div>
+      </div>
+    </div>
+
+    {% elif app.status == 'completed' %}
+    <div class="card border-0 mb-3" style="background:#e8f5e9">
+      <div class="card-body text-center py-4">
+        <i class="bi bi-check-circle-fill" style="font-size:40px;color:var(--ds)"></i>
+        <div class="fw-bold mt-2 fs-5">거래 완료</div>
+        {% if app.settlement %}
+        <div class="mt-3 p-3 bg-white rounded border">
+          <div style="font-size:11px;color:#888">최종 매각 금액</div>
+          <div style="font-size:22px;font-weight:700;color:var(--ds)">{{ "{:,.0f}".format(app.settlement.total_amount) }}원</div>
+          {% if app.settlement.payment_date %}
+          <div style="font-size:11px;color:#888;margin-top:4px">입금일: {{ app.settlement.payment_date }}</div>
+          {% endif %}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- 신청자 정보 요약 -->
+    <div class="card">
+      <div class="card-header"><i class="bi bi-person-fill me-2"></i>신청자 정보</div>
+      <div class="card-body" style="font-size:13px">
+        <div class="d-flex justify-content-between py-1 border-bottom">
+          <span class="text-muted">지점명</span><strong>{{ app.user.branch_name }}</strong>
+        </div>
+        <div class="d-flex justify-content-between py-1 border-bottom">
+          <span class="text-muted">지점코드</span><strong>{{ app.user.branch_code }}</strong>
+        </div>
+        <div class="d-flex justify-content-between py-1">
+          <span class="text-muted">지역</span><strong>{{ app.user.region }}</strong>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="mt-3">
+  <a href="/admin/applications" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-left me-1"></i>목록으로 돌아가기
+  </a>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function calcRow(input) {
+  const qty = parseFloat(input.dataset.qty) || 1;
+  const price = parseFloat(input.value) || 0;
+  const rowId = input.dataset.row;
+  const subEl = document.getElementById('sub_' + rowId);
+  if (subEl) subEl.textContent = (price * qty).toLocaleString('ko-KR');
+  calcTotal();
+}
+
+function calcTotal() {
+  let total = 0;
+  document.querySelectorAll('.price-input').forEach(inp => {
+    const qty = parseFloat(inp.dataset.qty) || 1;
+    const price = parseFloat(inp.value) || 0;
+    total += price * qty;
+  });
+  const el = document.getElementById('totalAmount');
+  if (el) el.textContent = total.toLocaleString('ko-KR');
+}
+</script>
+{% endblock %}
